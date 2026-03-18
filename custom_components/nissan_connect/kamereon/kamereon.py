@@ -349,9 +349,15 @@ class Vehicle:
         self.refresh_battery_status()
 
     def fetch_all(self):
-        self.fetch_cockpit()
+        try:
+            self.fetch_cockpit()
+        except Exception as e:
+            _LOGGER.debug("fetch_cockpit() not supported on this vehicle: %s", e)
         self.fetch_location()
-        self.fetch_battery_status()
+        try:
+            self.fetch_battery_status()
+        except Exception as e:
+            _LOGGER.warning("fetch_battery_status() failed: %s", e)
         self.fetch_hvac_status()
         self.fetch_lock_status()
 
@@ -641,8 +647,11 @@ class Vehicle:
         return body
 
     def fetch_battery_status(self):
-        self.fetch_battery_status_leaf()
-        if self.model_name == "Ariya":
+        try:
+            self.fetch_battery_status_leaf()
+        except Exception as e:
+            _LOGGER.debug("fetch_battery_status_leaf() failed: %s", e)
+        if self.model_name in ("Ariya", "TOWNSTAR"):
             self.fetch_battery_status_ariya()
 
     def fetch_battery_status_leaf(self):
@@ -658,6 +667,7 @@ class Vehicle:
 
         if not 'data' in body or not 'attributes' in body['data']:
             self.battery_supported = False
+            return
 
         battery_data = body['data']['attributes']
         self.battery_capacity = battery_data.get('batteryCapacity')  # kWh
@@ -706,6 +716,9 @@ class Vehicle:
         
         self.range_hvac_off = None
         self.range_hvac_on = battery_data.get('batteryAutonomy') or self.range_hvac_on
+        self.battery_level = battery_data.get('batteryLevel') or battery_data.get('stateOfCharge') or self.battery_level
+        self.total_mileage = battery_data.get('totalMileage') or battery_data.get('mileage') or self.total_mileage
+        self.mileage = self.total_mileage
 
         self.charging_speed = ChargingSpeed(None)
         self.charge_time_required_to_full = {
@@ -759,6 +772,26 @@ class Vehicle:
         if 'errors' in body:
             raise ValueError(body['errors'])
         return [TripSummary(s, self.vin) for s in body['data']['attributes']['summaries']]
+
+    def fetch_cockpit(self):
+        resp = self._get(
+            "{}v2/cars/{}/cockpit".format(self.session.settings['car_adapter_base_url'], self.vin)
+        )
+        body = resp.json()
+        if 'errors' in body:
+            raise ValueError(body['errors'])
+
+        cockpit_data = body['data']['attributes']
+        self.eco_score = cockpit_data.get('ecoScore')
+        self.fuel_autonomy = cockpit_data.get('fuelAutonomy')
+        self.fuel_consumption = cockpit_data.get('fuelConsumption')
+        self.fuel_economy = cockpit_data.get('fuelEconomy')
+        self.fuel_level = cockpit_data.get('fuelLevel')
+        if 'fuelLowWarning' in cockpit_data:
+            self.fuel_low_warning = bool(cockpit_data.get('fuelLowWarning', False))
+        self.fuel_quantity = cockpit_data.get('fuelQuantity')
+        self.mileage = cockpit_data.get('mileage')
+        self.total_mileage = cockpit_data.get('totalMileage')
 
     def fetch_notifications(
             self,
@@ -840,27 +873,6 @@ class Vehicle:
     def update_notification_settings(self):
         # TODO
         pass
-
-    def fetch_cockpit(self):
-        resp = self._get(
-            "{}v1/cars/{}/cockpit".format(self.session.settings['car_adapter_base_url'], self.vin)
-        )
-        body = resp.json()
-        if 'errors' in body:
-            raise ValueError(body['errors'])
-
-        cockpit_data = body['data']['attributes']
-        self.eco_score = cockpit_data.get('ecoScore')
-        self.fuel_autonomy = cockpit_data.get('fuelAutonomy')
-        self.fuel_consumption = cockpit_data.get('fuelConsumption')
-        self.fuel_economy = cockpit_data.get('fuelEconomy')
-        self.fuel_level = cockpit_data.get('fuelLevel')
-        if 'fuelLowWarning' in cockpit_data:
-            self.fuel_low_warning = bool(cockpit_data.get('fuelLowWarning', False))
-        self.fuel_quantity = cockpit_data.get('fuelQuantity')  # litres
-        self.mileage = cockpit_data.get('mileage')
-        self.total_mileage = cockpit_data.get('totalMileage')
-
 
 class TripSummary:
 
